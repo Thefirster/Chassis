@@ -1,0 +1,95 @@
+#include "motion_control.h"
+#include "math.h"
+#include "M3508.h"
+
+#define a2 352.5/2
+#define b2 310.0/2
+
+extern M3508x_STA M3508[8];
+
+/**
+  **************************************************************************
+  ** -------------------------------------------------------------------- **
+  ** @name          : motion_resolve
+  ** @brief         : 麦轮の速度分解
+  ** @param         : None
+  ** @retval        : None
+  ** @author        : XRaccoon
+  ** -------------------------------------------------------------------- **
+  ** @attention     : None
+  ** -------------------------------------------------------------------- **
+  **************************************************************************
+**/
+void motion_resolve(float vx,float vy,float vw)
+{
+
+    M3508[4].Position_S_PID_STruct.target=sqrt(2)*vy-sqrt(2)*vx-vw;
+    M3508[5].Position_S_PID_STruct.target=-(sqrt(2)*vy+sqrt(2)*vx+vw);
+    M3508[6].Position_S_PID_STruct.target=-(sqrt(2)*vy-sqrt(2)*vx+vw);
+    M3508[7].Position_S_PID_STruct.target=sqrt(2)*vy+sqrt(2)*vx-vw;
+
+    M3508[4].Position_S_PID_STruct.Input=M3508[4].Speed;
+    M3508[5].Position_S_PID_STruct.Input=M3508[5].Speed;
+    M3508[6].Position_S_PID_STruct.Input=M3508[6].Speed;
+    M3508[7].Position_S_PID_STruct.Input=M3508[7].Speed;
+}
+
+/**
+  **************************************************************************
+  ** -------------------------------------------------------------------- **
+  ** @name          : altitude_control_0
+  ** @brief         : None
+  ** @param         : None
+  ** @retval        : None
+  ** @author        : XRaccoon
+  ** -------------------------------------------------------------------- **
+  ** @attention     : UP 0   DOWN 1
+  ** -------------------------------------------------------------------- **
+  **************************************************************************
+**/
+void altitude_control_0(float high,float speed)
+{
+    M3508[1].Angle_target=-high;
+    M3508[2].Angle_target=high;
+
+    if(M3508[1].Angle_target!=M3508[1].target_last)M3508[1].direction=(M3508[1].Angle_target-M3508[1].dAngle_Sum/8192)/fabs(M3508[1].Angle_target-M3508[1].dAngle_Sum/8192);
+    if(M3508[2].Angle_target!=M3508[2].target_last)M3508[2].direction=(M3508[2].Angle_target-M3508[2].dAngle_Sum/8192)/fabs(M3508[2].Angle_target-M3508[2].dAngle_Sum/8192);
+		//对上一次的目标值进行保存，并和这一次进行比较，获得此次的方向
+	
+    M3508[1].target_last=M3508[1].Angle_target;
+    M3508[2].target_last=M3508[2].Angle_target;
+
+    if((M3508[1].Angle_target-M3508[1].dAngle_Sum/8192)*M3508[1].direction>1)
+        M3508[1].Position_S_PID_STruct.target=speed*(M3508[1].Angle_target-M3508[1].dAngle_Sum/8192)/fabs(M3508[1].Angle_target-M3508[1].dAngle_Sum/8192);
+    else M3508[1].Position_S_PID_STruct.target=0;
+
+    if((M3508[2].Angle_target-M3508[2].dAngle_Sum/8192)*M3508[2].direction>1)
+        M3508[2].Position_S_PID_STruct.target=speed*(M3508[2].Angle_target-M3508[2].dAngle_Sum/8192)/fabs(M3508[2].Angle_target-M3508[2].dAngle_Sum/8192);
+    else M3508[2].Position_S_PID_STruct.target=0;
+
+    M3508[1].Position_S_PID_STruct.Input=M3508[1].Speed;
+    M3508[2].Position_S_PID_STruct.Input=M3508[2].Speed;
+
+}
+
+void altitude_control_1(float high,float speed)
+{
+    M3508[0].Angle_target=high;
+    M3508[3].Angle_target=high;
+
+    if(M3508[0].Angle_target!=M3508[0].target_last)M3508[0].direction=(M3508[0].Angle_target-M3508[0].dAngle_Sum/8192)/fabs(M3508[0].Angle_target-M3508[0].dAngle_Sum/8192);
+    if(M3508[3].Angle_target!=M3508[3].target_last)M3508[3].direction=(M3508[3].Angle_target-M3508[3].dAngle_Sum/8192)/fabs(M3508[3].Angle_target-M3508[3].dAngle_Sum/8192);
+
+    M3508[0].target_last=M3508[0].Angle_target;
+    M3508[3].target_last=M3508[3].Angle_target;
+
+    if((M3508[0].Angle_target-M3508[0].dAngle_Sum/8192)*M3508[0].direction>1)
+        M3508[0].Position_S_PID_STruct.target=speed*(M3508[0].Angle_target-M3508[0].dAngle_Sum/8192)/fabs(M3508[0].Angle_target-M3508[0].dAngle_Sum/8192);
+    else M3508[0].Position_S_PID_STruct.target=0;
+    if((M3508[3].Angle_target-M3508[3].dAngle_Sum/8192)*M3508[3].direction>1)
+        M3508[3].Position_S_PID_STruct.target=speed*(M3508[3].Angle_target-M3508[3].dAngle_Sum/8192)/fabs(M3508[3].Angle_target-M3508[3].dAngle_Sum/8192);
+    else M3508[3].Position_S_PID_STruct.target=0;
+    M3508[0].Position_S_PID_STruct.Input=M3508[0].Speed;
+    M3508[3].Position_S_PID_STruct.Input=M3508[3].Speed;
+}
+

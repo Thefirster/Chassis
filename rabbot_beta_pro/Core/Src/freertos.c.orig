@@ -1,0 +1,654 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * File Name          : freertos.c
+  * Description        : Code for freertos applications
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2023 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "FreeRTOS.h"
+#include "task.h"
+#include "main.h"
+#include "cmsis_os.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "M3508.h"
+#include "motion_control.h"
+#include "handkey.h"
+#include "math.h"
+#include "A1_motor.h"
+#include "my_uart.h"
+#include "auto_route.h"
+#include "ANO_TC.h"
+#include "yuntai.h"
+//2023-04-12 01:06
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+//int m_state = 0;
+#define PI 3.1415926f
+#define RADIN_TO_REG 57.296f
+#define AUTO_STATE 0
+#define MANUAL_STATE 2
+#define CHANGE_TO_RADIAN (0.01745329251994f)
+int test = 0;//瀹炴垬璋冭瘯
+int flag_test=0;//鍗曠數鏈鸿皟璇?
+float x_set,y_set,w_set,h0_set,h1_set;
+float vx_set,vy_set;
+float pos_set=0;
+float speed_set=10;
+float speed_set_w;
+extern RC_Ctl_t CtrlData;
+int (*hook)(int x, int y);
+int GPIO_ID_STATE[4];
+extern M3508x_STA M3508[8];
+float RPM=0;
+float pos_7[5]={0};
+float pos_5[5]={0};
+extern A1_data a1_data[2];
+int a1_flag=0;
+int State_flag=0;
+extern MOTOR_recv motor_recv[2];
+int32_t test_pos = 0;
+extern float Rpm_set;
+float x,y,z;
+extern int16_t handkey_direction[4];
+extern float speed_level;
+int motion_flag=0;
+float c_x,c_y,c_w;
+float data2send[5];
+extern LUJING_STU Lujing_Status;
+extern float data_yaw;
+extern Action_data Action_Data;
+extern float mis_error;
+extern PID_Struct Cir_AdjustPID;
+extern coordinate_Struct World_Coordinate_system_TargetVel; 
+extern int reset_flag;
+float a1_pos[2];
+int wtf=0;
+float yuntai_x=0;
+
+float yuntai_y=0;
+
+extern LUJING_STU Lujing_Status;
+/*-----------云台参数-----------*/
+uint8_t flag_yuntai = 0;
+
+float end_pos_1,end_pos_2 = 0;
+uint8_t send_flag = 0;
+uint8_t vision_send_data = 0; // -2 -1 0 1 2
+
+float vx_last,vy_last;
+float vx_pre,vy_pre;
+float speed_up_rate=20.f;
+float radar_flag=0;
+extern float radar_start_x,radar_start_y;
+extern float radar_last_x,radar_last_y;
+extern float mapan_start_x,mapan_start_y;
+extern float kx,ky;
+extern float radar_sum,kx_av,ky_av;
+extern float radar_x,radar_y;
+extern float vx_0,vy_0;
+int GPIO_state;
+int fangxiang;
+
+float x_break_test = 10.0f;
+float angle_break_test = 0.5f;
+
+static void motion_3(void);
+static void motion_2(void);
+static void motion_1(void);
+static void motion_4(void);
+static void motion_5(void);
+static void motion_6(void);
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+/* 娉ㄥ唽娑堟伅 */
+enum{
+	OPER_TYPE_ADD = 0,   /*  */
+	OPER_TYPE_MINUS,     /*  */
+	OPER_TYPE_MULTI,     /*  */
+	OPER_TYPE_DEV,	     /*  */
+	OPER_TYPE_MAX
+};
+ 
+typedef struct handle_cb{
+	int type;
+	int (*handle)(int a, int b);   // HOOK_Task
+}HANDLE_CB;
+
+/* 
+娉ㄥ唽閽╁瓙锛岃繖閲屾樉寮忓湴鎶婃秷鎭被鍨嬪拰閽╁瓙鍑芥暟瀵瑰簲鍏崇郴浣撶幇鍑烘潵浜嗭紝
+handle_cb閲岄潰鐨則ype鍙互涓嶈鐨勶紝娉ㄦ剰缁存姢濂芥敞鍐屾秷鎭〃涓?
+姣忎釜鏋氫妇鍊煎厛鍚庨『搴忓拰涓嬮潰閽╁瓙鍑芥暟琛ㄤ腑鐨勫厛鍚庨『搴忎竴鑷达紝鑳藉搴斾笂
+灏辫浜? 
+*/
+HANDLE_CB g_handle [] = {
+//	{ OPER_TYPE_ADD, add },
+//	{ OPER_TYPE_MINUS, minus },
+//	{ OPER_TYPE_MULTI, multi },
+	{ OPER_TYPE_DEV, NULL}
+};
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN Variables */
+
+/* USER CODE END Variables */
+osThreadId defaultTaskHandle;
+osThreadId wait_stateHandle;
+osThreadId motion_stateHandle;
+osThreadId zero_stateHandle;
+osThreadId motor_controlHandle;
+osSemaphoreId myBinarySem01Handle;
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
+extern M3508x_STA M3508[8];
+/* USER CODE END FunctionPrototypes */
+
+void StartDefaultTask(void const * argument);
+void Wait_State(void const * argument);
+void Motion_State(void const * argument);
+void Zero_State(void const * argument);
+void Motor_Control(void const * argument);
+
+void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
+
+/* GetIdleTaskMemory prototype (linked to static allocation support) */
+void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize );
+
+/* USER CODE BEGIN GET_IDLE_TASK_MEMORY */
+static StaticTask_t xIdleTaskTCBBuffer;
+static StackType_t xIdleStack[configMINIMAL_STACK_SIZE];
+
+void vApplicationGetIdleTaskMemory( StaticTask_t **ppxIdleTaskTCBBuffer, StackType_t **ppxIdleTaskStackBuffer, uint32_t *pulIdleTaskStackSize )
+{
+    *ppxIdleTaskTCBBuffer = &xIdleTaskTCBBuffer;
+    *ppxIdleTaskStackBuffer = &xIdleStack[0];
+    *pulIdleTaskStackSize = configMINIMAL_STACK_SIZE;
+    /* place for user code */
+}
+/* USER CODE END GET_IDLE_TASK_MEMORY */
+
+/**
+  * @brief  FreeRTOS initialization
+  * @param  None
+  * @retval None
+  */
+void MX_FREERTOS_Init(void) {
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+    /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* Create the semaphores(s) */
+  /* definition and creation of myBinarySem01 */
+  osSemaphoreDef(myBinarySem01);
+  myBinarySem01Handle = osSemaphoreCreate(osSemaphore(myBinarySem01), 1);
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+    /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+    /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+    /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* definition and creation of defaultTask */
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityIdle, 0, 256);
+  defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
+  /* definition and creation of wait_state */
+  osThreadDef(wait_state, Wait_State, osPriorityIdle, 0, 256);
+  wait_stateHandle = osThreadCreate(osThread(wait_state), NULL);
+
+  /* definition and creation of motion_state */
+  osThreadDef(motion_state, Motion_State, osPriorityIdle, 0, 256);
+  motion_stateHandle = osThreadCreate(osThread(motion_state), NULL);
+
+  /* definition and creation of zero_state */
+  osThreadDef(zero_state, Zero_State, osPriorityHigh, 0, 256);
+  zero_stateHandle = osThreadCreate(osThread(zero_state), NULL);
+
+  /* definition and creation of motor_control */
+  osThreadDef(motor_control, Motor_Control, osPriorityIdle, 0, 256);
+  motor_controlHandle = osThreadCreate(osThread(motor_control), NULL);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+    /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+}
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void const * argument)
+{
+  /* USER CODE BEGIN StartDefaultTask */
+    /* Infinite loop */
+    for(;;)
+    {
+//		GPIO_ID_STATE[0] = HAL_GPIO_ReadPin(Motor_ID_0_GPIO_Port,Motor_ID_0_Pin);
+//		GPIO_ID_STATE[1] = HAL_GPIO_ReadPin(Motor_ID_1_GPIO_Port,Motor_ID_1_Pin);
+//		GPIO_ID_STATE[2] = HAL_GPIO_ReadPin(Motor_ID_2_GPIO_Port,Motor_ID_2_Pin);
+//		GPIO_ID_STATE[3] = HAL_GPIO_ReadPin(Motor_ID_3_GPIO_Port,Motor_ID_3_Pin);
+        osDelay(1);
+    }
+  /* USER CODE END StartDefaultTask */
+}
+
+/* USER CODE BEGIN Header_Wait_State */
+/**
+* @brief Function implementing the wait_state thread.
+* @param argument: x_set锛寉_set锛寁x_set锛寁y_set锛孋trlData.rc.ch1~3(鍒嗗埆涓哄墠鍚庛?佸乏鍙炽?佽嚜杞?)
+* @retval None
+*/
+/* USER CODE END Header_Wait_State */
+void Wait_State(void const * argument)
+{
+  /* USER CODE BEGIN Wait_State */
+    /* Infinite loop */
+    for(;;)
+    {
+
+				if(reset_flag^wtf)
+				{
+					wtf=!wtf;
+					zero_reset();
+				}
+				data2send[0] = mis_error;
+				data2send[1] = vx_set;
+				data2send[3] = vy_set;
+				data2send[2] = w_set;
+				data2send[4] = vx_0;
+				Usart_Send_To_Show32(&huart4,data2send);
+
+				
+//				if(yuntai_x==1)end_pos_1+=0.01;
+//				else if(yuntai_x==-1)end_pos_1-=0.01;
+//				
+//				if(yuntai_y==1)end_pos_2+=0.01;
+//				else if(yuntai_y==-1)end_pos_2-=0.01;
+//				osDelay(50);
+        osDelay(1);
+    }
+  /* USER CODE END Wait_State */
+}
+
+/* USER CODE BEGIN Header_Motion_State */
+/**
+* @brief Function implementing the motion_state thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Motion_State */
+void Motion_State(void const * argument)
+{
+  /* USER CODE BEGIN Motion_State */
+    /* Infinite loop */
+    for(;;)
+    {
+				if(State_flag==MANUAL_STATE){
+					x_set=handkey_direction[0];
+					y_set=-handkey_direction[1];
+					
+					speed_set=speed_level*5000;
+					speed_set_w=speed_level*3.5f;	
+					speed_up_rate=speed_level*35.0f;
+					vx_pre=x_set/sqrt(y_set*y_set+x_set*x_set+1)*speed_set*fabs(x_set)/1000.f;
+					vy_pre=y_set/sqrt(y_set*y_set+x_set*x_set+1)*speed_set*fabs(y_set)/1000.f;
+					//radar_flag=
+					if(vx_pre-vx_last>=speed_up_rate)
+					{
+						vx_0+=speed_up_rate;
+					}
+					else if(vx_pre-vx_last<=-speed_up_rate)
+					{
+						vx_0-=speed_up_rate;
+					}
+					else vx_0=vx_0;
+					
+					if(vy_pre-vy_last>=speed_up_rate)
+					{
+						vy_0+=speed_up_rate;
+					}
+					else if(vy_pre-vy_last<=-speed_up_rate)
+					{
+						vy_0-=speed_up_rate;
+					}
+					else vy_0=vy_0;					
+					if(15<handkey_direction[2] && handkey_direction[2]<400)
+					{w_set+=speed_set_w;
+					 fangxiang =0;
+					}
+					if(-400<handkey_direction[2] && handkey_direction[2]<-15)
+					{w_set-=speed_set_w;
+					 fangxiang =1;
+					}
+					if(handkey_direction[2]<-400)
+					{w_set-=speed_set_w*1.5f;
+					 fangxiang = 1;
+					}
+					if(handkey_direction[2]>400)
+					{
+						w_set+=speed_set_w*1.5f;
+						fangxiang = 0;
+					}
+					if(handkey_direction[2] ==0 && fangxiang ==0&&w_set > 0)	w_set -= 35.0f;
+					if (handkey_direction[2]==0 && fangxiang ==1 && w_set < 0) w_set += 35.0f;
+					
+					
+					
+					vx_last=vx_0;
+					vy_last=vy_0;
+//					yuntai_manual(PITCH_MOTOR_ID);
+//					yuntai_manual(YAW_MOTOR_ID);
+					//osDelay(10);
+						vx_set=vy_0*sinf(-Action_Data.angle_Z*CHANGE_TO_RADIAN)+vx_0*cosf(-Action_Data.angle_Z*CHANGE_TO_RADIAN);
+	vy_set=vy_0*cosf(-Action_Data.angle_Z*CHANGE_TO_RADIAN)-vx_0*sinf(-Action_Data.angle_Z*CHANGE_TO_RADIAN);
+				
+				motion_resolve(-vx_set,vy_set,w_set);
+					
+        }
+				
+
+				else if(State_flag==AUTO_STATE){
+					if(motion_flag==1)
+					{
+
+//						circle(-1833,4617,-30,0,2000,3000,0.1,0.2);
+						line(-1253,4200,0,0,4000,0.1,0.1,5000,5000,15);
+						line(-5300,4200,0,4000,0,0.1,0.1,5000,5000,15);// 圆弧（目标x，目标y，圆心角(正负)，V初，V末，V最大，是否沿切，加速区比例，减速区比例）
+						vx_0=0;
+						vy_0=0;
+						w_set=0;
+							motion_flag=0;
+					}
+					if(motion_flag==2)
+					{
+//			//Keep_Position(0,0,0);
+						lujing_set_break_condition(&Lujing_Status,30.0f,5.0f);
+						line(1500,0,0,0,4000,0.1,0.1,5000,5000,15);
+						lujing_set_break_condition(&Lujing_Status,x_break_test,angle_break_test);
+						line(1500,-2512,0,4000,0,0.1,0.1,5000,5000,15);
+						
+						vx_0=0;
+						vy_0=0;
+						w_set=0;
+						
+						motion_flag=0;
+					}
+					if(motion_flag==3)//测试正方向
+					{
+						lujing_set_break_condition(&Lujing_Status,x_break_test,angle_break_test);
+						line(-5300,2000,0,0,0,0.1,0.1,5000,5000,15);
+//						line(-3014,2000,0,0,2000,0.1,0.1,3000,5000,5);
+//						line(-3014,-512,0,2000,0,0.1,0.1,3000,5000,5);
+						vx_0=0;
+						vy_0=0;
+						w_set=0;
+						
+						motion_flag=0;
+					}
+					if(motion_flag==4)
+					{
+						Keep_Position(0,0,0);
+//						motion_flag=0;
+					}
+					Keep_Position(Lujing_Status.CoordinateSystem.Target_Position.x,Lujing_Status.CoordinateSystem.Target_Position.y,Lujing_Status.CoordinateSystem.Target_Position.w );
+				}
+	
+
+        osDelay(1);
+    }
+  /* USER CODE END Motion_State */
+}
+
+/* USER CODE BEGIN Header_Zero_State */
+/**
+* @brief Function implementing the zero_state thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Zero_State */
+void Zero_State(void const * argument)
+{
+  /* USER CODE BEGIN Zero_State */
+    /* Infinite loop */
+    for(;;)
+    {
+			a1_pos[0]=a1_get_position(PITCH_MOTOR_ID);
+			a1_pos[1]=a1_get_position(YAW_MOTOR_ID);
+		/*----------------------云台控制---------------------*/
+		 if (send_flag == 1)//可能更改串口
+        {
+            HAL_UART_Transmit(&huart3, &vision_send_data, 1, 0xFFF);
+//            send_flag = 0;
+        }
+        if(flag_yuntai == 1)
+        {
+            
+		  yuntai_start_path(YAW_MOTOR_ID, end_pos_1, 1);//非阻塞式的，需要自己添加一个while进行卡死
+
+          yuntai_start_path(PITCH_MOTOR_ID, end_pos_2, 1);
+			while(fabs(a1_get_position(PITCH_MOTOR_ID)-end_pos_2) > 0.03){};		
+			while(fabs(a1_get_position(YAW_MOTOR_ID)-end_pos_1) > 0.01){};					
+						mode_change();
+            flag_yuntai = 0;
+        }
+		/*----------------------底盘控制---------------------*/
+		
+        if(flag_test == 1)
+        {
+					flag_test = 0;
+					motion_1(); //  取环
+        }
+				if(flag_test==2)
+				{
+					flag_test = 0;
+					GPIO_state = HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_0);
+					motion_2();//抬升
+				}
+        osDelay(1);
+				if(flag_test==3)
+				{
+					flag_test = 0;
+//					motion_3();
+					a1_flag = 1; // yuntai onM3508
+					
+				}
+				if(flag_test==4)
+				{
+					flag_test = 0;
+					motion_4();
+				}
+				if(flag_test==5)
+				{
+					flag_test=0;
+					position_set(&M3508[7],pos_7[1]);
+				}
+				if(flag_test==6)
+				{
+					flag_test=0;
+					position_set(&M3508[5],pos_5[1]);
+				}
+				if(flag_test==7)
+				{
+					flag_test=0;
+					motion_5();
+				}
+				if(flag_test==8)
+				{
+					flag_test=0;
+					motion_6();
+				}
+				if(flag_test==9)
+				{
+					flag_test=0;
+					motion_resolve(x,y,z);
+					
+				}
+				if(flag_test==10)
+				{
+					flag_test=0;
+					motion_resolve(0,0,0);
+					
+				}
+    }
+  /* USER CODE END Zero_State */
+}
+
+/* USER CODE BEGIN Header_Motor_Control */
+/**
+* @brief Function implementing the motor_control thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Motor_Control */
+void Motor_Control(void const * argument)
+{
+  /* USER CODE BEGIN Motor_Control */
+    /* Infinite loop */
+    for(;;)
+    {
+
+				if(a1_flag==1)
+			{
+				// 0 4.476 ,1 6.237 init
+				//HAL_Delay(2);
+//				A1_Motor_Send_Data(a1_data[1].w, a1_data[1].pos, a1_data[1].kp, a1_data[1].kw,1,10);//now+28.5
+//				HAL_Delay(2);
+//				A1_Motor_Send_Data(a1_data[0].w, a1_data[0].pos, a1_data[0].kp, a1_data[0].kw,0,10);//now-8
+//				HAL_Delay(2);
+//				a1_data[0].w_now = motor_recv[0].motor_recv_data.Mdata.W / 128.f;
+//        a1_data[0].angle = RADIN_TO_REG / 9.0f * motor_recv[0].motor_recv_data.Mdata.Pos * 2 * PI / 16384.0f;
+//				a1_data[1].w_now = motor_recv[1].motor_recv_data.Mdata.W / 128.f;
+//        a1_data[1].angle = RADIN_TO_REG / 9.0f * motor_recv[1].motor_recv_data.Mdata.Pos * 2 * PI / 16384.0f;
+			}
+			if(radar_flag==1)
+			{
+			if(fabs(radar_x-radar_last_x)>0.2f||fabs(radar_y-radar_last_y)>0.2f){
+			kx+=(mapan_start_x-Action_Data.x)/(radar_x-radar_start_x);
+			ky+=(Action_Data.y-mapan_start_y)/(radar_y-radar_start_y);
+			radar_last_x=radar_x;
+			radar_last_y=radar_y;
+			radar_sum++;
+			kx_av=kx/radar_sum;
+			ky_av=ky/radar_sum;
+			}
+			//osDelay(100);
+			}
+//		CAN2_SetMotor_0_3(M3508);
+//		CAN2_SetMotor_4_7(M3508);
+        osDelay(1);
+    }
+  /* USER CODE END Motor_Control */
+}
+
+/* Private application code --------------------------------------------------*/
+/* USER CODE BEGIN Application */
+void motion_1() //  取环
+{
+//	//HAL_GPIO_WritePin(GPIOE,GPIO_PIN_8,GPIO_PIN_SET);
+//	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,GPIO_PIN_RESET);
+//	//position_set(&M3508_2[5],-3000000);
+//	position_set(&M3508_2[7],116000);
+	
+	HAL_GPIO_WritePin(IO_1_QI_GPIO_Port,IO_1_QI_Pin,GPIO_PIN_SET);
+	osDelay(1000);
+	position_set(&M3508[CATCH],3400000); // 3500000
+	osDelay(1000);
+	HAL_GPIO_WritePin(IO_1_QI_GPIO_Port,IO_1_QI_Pin,GPIO_PIN_RESET);
+	osDelay(1000);
+	position_set(&M3508[CATCH],0);
+	
+}
+
+void motion_2() // 复位
+{
+	//HAL_GPIO_WritePin(GPIOE,GPIO_PIN_8,GPIO_PIN_SET);
+//	HAL_GPIO_WritePin(GPIOB,GPIO_PIN_0,GPIO_PIN_RESET);
+	//position_set(&M3508[5],-3000000);
+	position_set(&M3508[SHOOT],-116000);
+	if(GPIO_state == 1)M3508[SHOOT].dAngle_Sum = M3508[SHOOT].Angle ;
+	
+	
+}
+
+extern int a1_flag;
+void motion_3() // yuntai
+{
+	a1_flag = 1; // 开启云台
+}
+
+void motion_4() // 装填
+{
+//	HAL_GPIO_WritePin(GPIOA,GPIO_PIN_7,GPIO_PIN_SET);
+//	HAL_Delay(500);
+//	HAL_GPIO_WritePin(GPIOE,GPIO_PIN_8,GPIO_PIN_SET);
+//	HAL_Delay(500);
+//	HAL_GPIO_WritePin(GPIOE,GPIO_PIN_8,GPIO_PIN_RESET);
+//	HAL_Delay(500);
+//	HAL_GPIO_WritePin(GPIOA,GPIO_PIN_7,GPIO_PIN_RESET);
+	position_set(&M3508[SHOOT],8192);	
+	
+	
+}
+
+void motion_5()
+{
+	float vesc_boost=0;
+	vesc_boost=28.5f/300.0f;
+	for(int i=0;i<300;i++)
+	{
+		a1_data[1].pos+=vesc_boost;
+		osDelay(1);
+	}
+}
+
+void motion_6()
+{
+	float vesc_boost=0;
+	vesc_boost=-5.0f/100.0f;
+	for(int i=0;i<100;i++)
+	{
+		a1_data[0].pos+=vesc_boost;
+		osDelay(1);
+	}
+}
+/* USER CODE END Application */

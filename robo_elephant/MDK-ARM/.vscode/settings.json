@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "pid_controller.h": "c",
+        "speed_decomposition.h": "c"
+    }
+}
